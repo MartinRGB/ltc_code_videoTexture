@@ -66,6 +66,7 @@
 
 
 <script>
+
 var g_vshader = null;
 
 var g_param_types = {};
@@ -186,6 +187,11 @@ var controller = null;
 
 var ltc_texture_1 = null;
 var ltc_texture_2 = null;
+var img_texture_1 = null;
+var img_texture_2 = null;
+var video_texture_1 = null;
+var video_1 = null;
+var copyVideo = false;
 
 var rttFramebuffer = null;
 var rttTexture = null;
@@ -209,7 +215,7 @@ function FetchFile(url, cache)
 }
 
 function SetClampedTextureState()
-{
+{ 
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -330,6 +336,16 @@ function init() {
     gl.bindTexture(gl.TEXTURE_2D, ltc_texture_2);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 64, 64, 0, gl.RGBA, gl.FLOAT, new Float32Array(g_ltc_2));
     SetClampedTextureState();
+
+    img_texture_1 = loadImageTexture(gl, "images/test.png");
+    SetClampedTextureState()
+
+    img_texture_2 = loadRepeatingImageTexture(gl, "images/floor.jpg");
+    SetClampedTextureState()
+
+    video_texture_1 = initVideoTexture(gl);
+    video_1 = setupVideo("images/test.mp4");
+
 
     // Fetch media and kick off the main program once everything has loaded
     $(function() {
@@ -600,7 +616,234 @@ function checkGLError() {
     }
 }
 
+//
+// Initialize a texture and load an image.
+// When the image finished loading copy it into the texture.
+//
 
+// *** Img Texture ***
+function loadImageTexture(gl, url) {
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+  
+    // Because images have to be downloaded over the internet
+    // they might take a moment until they are ready.
+    // Until then put a single pixel in the texture so we can
+    // use it immediately. When the image has finished downloading
+    // we'll update the texture with the contents of the image.
+    const level = 0;
+    const internalFormat = gl.RGBA;
+    const width = 1;
+    const height = 1;
+    const border = 0;
+    const srcFormat = gl.RGBA;
+    const srcType = gl.UNSIGNED_BYTE;
+    const pixel = new Uint8Array([0, 0, 255, 255]); // opaque blue
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      level,
+      internalFormat,
+      width,
+      height,
+      border,
+      srcFormat,
+      srcType,
+      pixel
+    );
+  
+    const image = new Image();
+    image.onload = () => {
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        level,
+        internalFormat,
+        srcFormat,
+        srcType,
+        image
+      );
+  
+      // WebGL1 has different requirements for power of 2 images
+      // vs. non power of 2 images so check if the image is a
+      // power of 2 in both dimensions.
+      if (isPowerOf2(image.width) && isPowerOf2(image.height)) {
+        // Yes, it's a power of 2. Generate mips.
+        gl.generateMipmap(gl.TEXTURE_2D);
+      } else {
+        // No, it's not a power of 2. Turn off mips and set
+        // wrapping to clamp to edge
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      }
+    };
+    image.src = url;
+  
+    return texture;
+}
+
+function loadRepeatingImageTexture(gl, url) {
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+  
+    // Because images have to be downloaded over the internet
+    // they might take a moment until they are ready.
+    // Until then put a single pixel in the texture so we can
+    // use it immediately. When the image has finished downloading
+    // we'll update the texture with the contents of the image.
+    const level = 0;
+    const internalFormat = gl.RGBA;
+    const width = 1;
+    const height = 1;
+    const border = 0;
+    const srcFormat = gl.RGBA;
+    const srcType = gl.UNSIGNED_BYTE;
+    const pixel = new Uint8Array([0, 0, 255, 255]); // opaque blue
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      level,
+      internalFormat,
+      width,
+      height,
+      border,
+      srcFormat,
+      srcType,
+      pixel
+    );
+  
+    const image = new Image();
+    image.onload = () => {
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        level,
+        internalFormat,
+        srcFormat,
+        srcType,
+        image
+      );
+  
+      // WebGL1 has different requirements for power of 2 images
+      // vs. non power of 2 images so check if the image is a
+      // power of 2 in both dimensions.
+      if (isPowerOf2(image.width) && isPowerOf2(image.height)) {
+        // Yes, it's a power of 2. Generate mips.
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      } else {
+        // No, it's not a power of 2. Turn off mips and set
+        // wrapping to clamp to edge
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      }
+    };
+    image.src = url;
+  
+    return texture;
+}
+  
+function isPowerOf2(value) {
+return (value & (value - 1)) === 0;
+}
+  
+// *** Video Texture ***
+function setupVideo(url) {
+    const video = document.createElement("video");
+  
+    let playing = false;
+    let timeupdate = false;
+  
+    video.playsInline = true;
+    video.muted = true;
+    video.loop = true;
+  
+    // Waiting for these 2 events ensures
+    // there is data in the video
+  
+    video.addEventListener(
+      "playing",
+      () => {
+        playing = true;
+        checkReady();
+      },
+      true
+    );
+  
+    video.addEventListener(
+      "timeupdate",
+      () => {
+        timeupdate = true;
+        checkReady();
+      },
+      true
+    );
+  
+    video.src = url;
+    video.play();
+  
+    function checkReady() {
+      if (playing && timeupdate) {
+        copyVideo = true;
+      }
+    }
+  
+    return video;
+  }
+  
+  function initVideoTexture(gl) {
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+  
+    // Because video has to be download over the internet
+    // they might take a moment until it's ready so
+    // put a single pixel in the texture so we can
+    // use it immediately.
+    const level = 0;
+    const internalFormat = gl.RGBA;
+    const width = 1;
+    const height = 1;
+    const border = 0;
+    const srcFormat = gl.RGBA;
+    const srcType = gl.UNSIGNED_BYTE;
+    const pixel = new Uint8Array([0, 0, 255, 255]); // opaque blue
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      level,
+      internalFormat,
+      width,
+      height,
+      border,
+      srcFormat,
+      srcType,
+      pixel
+    );
+  
+    // Turn off mips and set wrapping to clamp to edge so it
+    // will work regardless of the dimensions of the video.
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  
+    return texture;
+  }
+
+  function updateVideoTexture(gl, texture, video) {
+    const level = 0;
+    const internalFormat = gl.RGBA;
+    const srcFormat = gl.RGBA;
+    const srcType = gl.UNSIGNED_BYTE;
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+
+    if (video.readyState >= video.HAVE_CURRENT_DATA) {
+      gl.texImage2D(gl.TEXTURE_2D, level, internalFormat, srcFormat, srcType, video);
+    }
+  }
+  
+  
+var isBlend = false;
+  
 function draw() {
     parameters.time = new Date().getTime() - parameters.start_time;
 
@@ -653,6 +896,26 @@ function draw() {
     gl.bindTexture(gl.TEXTURE_2D, ltc_texture_2);
     gl.uniform1i(gl.getUniformLocation(currentProgram, "ltc_2"), 1);
 
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, img_texture_1);
+    gl.uniform1i(gl.getUniformLocation(currentProgram, "img_tex"), 2);
+
+
+
+    // *** video texture ***
+    gl.activeTexture(gl.TEXTURE3);
+    //gl.bindTexture(gl.TEXTURE_2D, video_texture_1);
+    if(copyVideo){
+        updateVideoTexture(gl, video_texture_1, video_1)
+    }
+    gl.uniform1i(gl.getUniformLocation(currentProgram, "vid_tex"), 3);
+
+    gl.activeTexture(gl.TEXTURE4);
+    gl.bindTexture(gl.TEXTURE_2D, img_texture_2);
+    gl.uniform1i(gl.getUniformLocation(currentProgram, "floor_tex"), 4);
+
+
+
     checkGLError();
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, rttFramebuffer);
@@ -665,8 +928,10 @@ function draw() {
     gl.uniform1i(location("sampleCount"), g_sample_count);
     g_sample_count += 8;
 
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.ONE, gl.ONE);
+    if(isBlend){
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.ONE, gl.ONE);
+    }
 
     // Render geometry
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
@@ -678,7 +943,9 @@ function draw() {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.useProgram(blitProgram);
 
-    gl.disable(gl.BLEND);
+    if(isBlend){
+        gl.disable(gl.BLEND);
+    }
 
     // Set textures
     gl.activeTexture(gl.TEXTURE0);
