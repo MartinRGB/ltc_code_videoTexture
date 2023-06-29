@@ -1,13 +1,14 @@
-// bind roughness   {label:"Roughness", default:0.25, min:0.01, max:1, step:0.001}
+// bind roughness   {label:"Roughness", default:0.5, min:0.01, max:5, step:0.001}
 // bind dcolor      {label:"Diffuse Color",  r:1.0, g:1.0, b:1.0}
-// bind scolor      {label:"Specular Color", r:0.23, g:0.23, b:0.23}
-// bind intensity   {label:"Light Intensity", default:4, min:0, max:10}
-// bind width       {label:"Width",  default: 8, min:0.1, max:15, step:0.1}
-// bind height      {label:"Height", default: 8, min:0.1, max:15, step:0.1}
+// bind scolor      {label:"Specular Color", r:1.0, g:1.0, b:1.0}
+// bind intensity   {label:"Light Intensity", default:4, min:0, max:100}
+// bind width       {label:"Width",  default: 14.4, min:0.1, max:15, step:0.1}
+// bind height      {label:"Height", default: 9, min:0.1, max:15, step:0.1}
 // bind roty        {label:"Rotation Y", default: 0, min:0, max:1, step:0.001}
 // bind rotz        {label:"Rotation Z", default: 0, min:0, max:1, step:0.001}
 // bind twoSided    {label:"Two-sided", default:false}
 // bind clipless    {label:"Clipless Approximation", default:false}
+// bind isVideo     {label:"Is Video", default:true}
 
 uniform float roughness;
 uniform vec3  dcolor;
@@ -24,6 +25,9 @@ uniform bool clipless;
 
 uniform sampler2D ltc_1;
 uniform sampler2D ltc_2;
+uniform sampler2D img_tex;
+uniform sampler2D floor_tex;
+uniform sampler2D vid_tex;
 
 uniform mat4  view;
 uniform vec2  resolution;
@@ -77,6 +81,31 @@ bool RayRectIntersect(Ray ray, Rect rect, out float t)
     }
 
     return intersect;
+}
+
+vec4 RayRectIntersectDrawColor(Ray ray, Rect rect, out float t)
+{
+    bool intersect = RayPlaneIntersect(ray, rect.plane, t);
+    if (intersect)
+    {
+        vec3 pos  = ray.origin + ray.dir*t;
+        vec3 lpos = pos - rect.center;
+
+        float x = dot(lpos, rect.dirx);
+        float y = dot(lpos, rect.diry);
+
+        if (abs(x) > rect.halfx || abs(y) > rect.halfy){
+            return vec4(0.);
+        }
+        else{
+            float vX = (x/(rect.halfx) + 1.)/2.;
+            float vY = (y/(rect.halfy) + 1.)/2.;
+            vec2 vUv = vec2(vX,vY);
+            vec4 col = texture(vid_tex,vec2(vUv.x,1.-vUv.y));
+            return col;
+        }
+    }
+
 }
 
 // Camera functions
@@ -135,6 +164,129 @@ vec3 rotation_z(vec3 v, float a)
 vec3 rotation_yz(vec3 v, float ay, float az)
 {
     return rotation_z(rotation_y(v, ay), az);
+}
+
+// ******* Filtered Border Region 
+// https://advances.realtimerendering.com/s2016/s2016_ltc_rnd.pdf p-104  -> filtered border region
+// https://www.shadertoy.com/view/dd2SDd
+
+float maskBox(vec2 _st, vec2 _size, float _smoothEdges){
+    _size = vec2(0.5)-_size*0.5;
+    vec2 aa = vec2(_smoothEdges*0.5);
+    vec2 uv = smoothstep(_size,_size+aa,_st);
+    uv *= smoothstep(_size,_size+aa,vec2(1.0)-_st);
+    return uv.x*uv.y;
+}
+
+vec4 draw(vec2 uv,in sampler2D tex) {
+    // return texture(tex,vec2(1.- uv.x,uv.y)).rgb;   
+    return textureLod(tex,vec2(uv.x,1. - uv.y),8.);   
+}
+
+float grid(float var, float size) {
+    return floor(var*size)/size;
+}
+
+float blurRand(vec2 co){
+    return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);
+}
+
+// *** the 'repeats' affect the performance
+vec4 blurredImage( in float roughness,in vec2 uv , in sampler2D tex)
+{
+    
+    float bluramount = 0.2 * roughness;
+    //float dists = 5.;
+    vec4 blurred_image = vec4(0.);
+    #define repeats 30.
+    for (float i = 0.; i < repeats; i++) { 
+        //Older:
+        //vec2 q = vec2(cos(degrees((grid(i,dists)/repeats)*360.)),sin(degrees((grid(i,dists)/repeats)*360.))) * (1./(1.+mod(i,dists)));
+        vec2 q = vec2(cos(degrees((i/repeats)*360.)),sin(degrees((i/repeats)*360.))) *  (blurRand(vec2(i,uv.x+uv.y))+bluramount); 
+        vec2 uv2 = uv+(q*bluramount);
+        blurred_image += draw(uv2,tex)/2.;
+        //One more to hide the noise.
+        q = vec2(cos(degrees((i/repeats)*360.)),sin(degrees((i/repeats)*360.))) *  (blurRand(vec2(i+2.,uv.x+uv.y+24.))+bluramount); 
+        uv2 = uv+(q*bluramount);
+        blurred_image += draw(uv2,tex)/2.;
+    }
+    blurred_image /= repeats;
+        
+    return blurred_image;
+}
+
+
+vec4 filterBorderRegion(in float roughness,in vec2 uv,in sampler2D tex){
+    // this is useless now
+	float scale = 1.;
+    float error = 0.4; //0.45
+
+    // Convert uv range to -1 to 1
+    vec2 UVC = uv * 2.0 - 1.0;
+    UVC *= (1. * 0.5 + 0.5) * (1. + (1. - scale));
+    // Convert back to 0 to 1 range
+    UVC = UVC * 0.5 + 0.5;
+
+    vec4 ClearCol;
+    vec4 BlurCol;
+    
+    BlurCol = blurredImage(2.,uv,tex);
+	if(UVC.x < 1. && UVC.x > 0. && UVC.y > 0. && UVC.y < 1.){
+        ClearCol = blurredImage(min(2.,roughness),UVC,tex);
+    }
+	//ClearCol.rgb = blurredImage(roughness,UVC,tex);
+	float boxMask = maskBox(UVC,vec2(scale+0.),error);
+    BlurCol.rgb = mix(BlurCol.rgb, ClearCol.rgb, boxMask);
+    return BlurCol;
+    
+    // # Method 2
+	//return blurredImage(min(2.,roughness),uv,tex).rgb;
+}
+
+vec4 FetchDiffuseFilteredTexture(float roughness,vec3 L[5],vec3 vLooupVector,sampler2D tex)
+{
+	vec3 V1 = L[1] - L[0];
+	vec3 V2 = L[3] - L[0];
+	// Plane's normal
+	vec3 PlaneOrtho = cross(V1, V2);
+	float PlaneAreaSquared = dot(PlaneOrtho, PlaneOrtho);
+	float planeDistxPlaneArea = dot(PlaneOrtho, L[0]);
+	// orthonormal projection of (0,0,0) in area light space
+	vec3 P = planeDistxPlaneArea * PlaneOrtho / PlaneAreaSquared - L[0];
+
+	// find tex coords of P
+	float dot_V1_V2 = dot(V1, V2);
+	float inv_dot_V1_V1 = 1.0 / dot(V1, V1);
+	vec3 V2_ = V2 - V1 * dot_V1_V2 * inv_dot_V1_V1;
+	vec2 UV;
+	UV.y = dot(V2_, P) / dot(V2_, V2_);
+	UV.x = dot(V1, P) * inv_dot_V1_V1 - dot_V1_V2 * inv_dot_V1_V1 * UV.y;
+
+	// float scale = 1.;
+    // float error = 0.45;
+    // // Convert uv range to -1 to 1
+    // vec2 UVC = UV * 2.0 - 1.0;
+    // UVC *= (1. * 0.5 + 0.5) * (1. + (1. - scale));
+    // // Convert back to 0 to 1 range
+    // UVC = UVC * 0.5 + 0.5;
+
+    // vec4 ClearCol;
+    // vec4 BlurCol;
+    
+    // BlurCol.rgb = blurredImage(2.,UV,tex);
+	// if(UVC.x < 1. && UVC.x > 0. && UVC.y > 0. && UVC.y < 1.){
+    //     ClearCol.rgb = blurredImage(min(2.,roughness),UVC,tex);
+    // }
+	// //ClearCol.rgb = blurredImage(roughness,UVC,tex);
+	// float boxMask = maskBox(UVC,vec2(scale+0.),error);
+    // BlurCol.rgb = mix(BlurCol.rgb, ClearCol.rgb, boxMask);
+
+    // to delete border light even the canvas is dark
+    // UV -= .5;
+    // UV /= 1.1;
+    // UV += .5;
+
+	return filterBorderRegion(roughness,UV,tex);
 }
 
 // Linearly Transformed Cosines
@@ -271,6 +423,30 @@ void ClipQuadToHorizon(inout vec3 L[5], out int n)
 }
 
 
+mat3 caculatedMInv(float roughness,vec3 N,vec3 V,in sampler2D lut_tex){
+
+    const float PI = 3.1415926;
+    const float LUTSIZE  = 64.0;
+    const float MATRIX_PARAM_OFFSET = 64.0;
+
+    float theta = acos(dot(N, V));
+    
+    vec2 uv = vec2(roughness, theta/(0.5*PI)) * float(LUTSIZE-1.);
+    uv += vec2(0.5 );
+    
+    vec2 LUT_RES = vec2(64.);
+    vec4 params = texture(lut_tex, (uv+vec2(MATRIX_PARAM_OFFSET, 0.0))/LUT_RES);
+    
+    mat3 Minv = mat3(
+        vec3(  1,        0,      params.y),
+        vec3(  0,     params.z,   0),
+        vec3(params.w,   0,      params.x)
+    );
+    
+    return Minv;
+}
+
+
 vec3 LTC_Evaluate(
     vec3 N, vec3 V, vec3 P, mat3 Minv, vec3 points[4], bool twoSided)
 {
@@ -353,8 +529,26 @@ vec3 LTC_Evaluate(
     }
 
     vec3 Lo_i = vec3(sum, sum, sum);
+    
+    vec3 PL[5];
+    PL[0] = mul(Minv, points[0] - P);
+    PL[1] = mul(Minv, points[1] - P);
+    PL[2] = mul(Minv, points[2] - P);
+    PL[3] = mul(Minv, points[3] - P);
 
-    return Lo_i;
+    // *** insert code here ***
+    vec3 e1 = normalize(PL[0] - PL[1]);
+    vec3 e2 = normalize(PL[2] - PL[1]);
+    vec3 N2 = cross(e1, e2); // Normal to light
+    vec3 V2 = N2 * dot(PL[1], N2); // Vector to some point in light rect
+    vec2 Tlight_shape = vec2(length(PL[0] - PL[1]), length(PL[2] - PL[1]));
+    V2 = V2 - PL[1];
+    float b = e1.y*e2.x - e1.x*e2.y + .1; // + .1 to remove artifacts
+	vec2 pLight = vec2((V2.y*e2.x - V2.x*e2.y)/b, (V2.x*e1.y - V2.y*e1.x)/b);
+   	pLight /= Tlight_shape;
+    //vec4 texCol = texture(img_tex, vec2(pLight.x,1.-pLight.y));
+    vec4 ref_col = FetchDiffuseFilteredTexture(roughness,PL,vec3(sum),vid_tex);
+    return Lo_i*ref_col.rgb;
 }
 
 // Scene helpers
@@ -429,8 +623,17 @@ void main()
         vec3 N = floorPlane.xyz;
         vec3 V = -ray.dir;
 
+
+        float new_Roughness;
+        vec3 floorTexture = texture(floor_tex,pos.xz/10.).rgb;
+
+        new_Roughness = floorTexture.x;
+        new_Roughness *= roughness;
+        new_Roughness += 0.2;
+        
+
         float ndotv = saturate(dot(N, V));
-        vec2 uv = vec2(roughness, sqrt(1.0 - ndotv));
+        vec2 uv = vec2(new_Roughness, sqrt(1.0 - ndotv)); //roughness
         uv = uv*LUT_SCALE + LUT_BIAS;
 
         vec4 t1 = texture(ltc_1, uv);
@@ -442,19 +645,24 @@ void main()
             vec3(t1.z, 0, t1.w)
         );
 
+        //Minv = caculatedMInv(new_Roughness,N,V,ltc_1);
+
+
         vec3 spec = LTC_Evaluate(N, V, pos, Minv, points, twoSided);
         // BRDF shadowing and Fresnel
         spec *= scol*t2.x + (1.0 - scol)*t2.y;
 
         vec3 diff = LTC_Evaluate(N, V, pos, mat3(1), points, twoSided);
 
-        col = lcol*(spec + dcol*diff);
+        // col - lcol*(spec + dcol*diff);
+        col = lcol*(spec + dcol*diff) * floorTexture;
+        col *= 1.0;
     }
 
     float distToRect;
     if (RayRectIntersect(ray, rect, distToRect))
         if ((distToRect < distToFloor) || !hitFloor)
-            col = lcol;
+            col = RayRectIntersectDrawColor(ray, rect, distToRect).rgb;
 
     FragColor = vec4(col, 1.0);
 }
