@@ -1,3 +1,5 @@
+This is a fork of selfshadow's [ltc_code](https://github.com/selfshadow/ltc_code). I added some video & image textures.Also optimized the floor's material.
+
 ## Overview
 This repository contains an (evolving) reference implementation for the following publications:
 * [Real-Time Polygonal-Light Shading with Linearly Transformed Cosines](https://eheitzresearch.wordpress.com/415-2/) (2016)
